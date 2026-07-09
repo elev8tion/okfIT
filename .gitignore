@@ -1,0 +1,26 @@
+node_modules/
+tmp/
+coverage/
+*.tgz
+.DS_Store
+_private/
+launch/
+*-okf/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+pnpm-debug.log*
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db

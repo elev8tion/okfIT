@@ -1,0 +1,4 @@
+interface:
+  display_name: "okfIT"
+  short_description: "Use docs as local MCP knowledge"
+  default_prompt: "Use $okfit to connect docs as a local okfIT MCP source and answer with cited source context."

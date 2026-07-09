@@ -1,0 +1,10 @@
+{
+  "sourceCommand": "npx -y okfit import examples/local-markdown --out /tmp/okfit-docs --source-name \"okfit docs\" --force --stable-timestamps",
+  "expectedConceptCount": 6,
+  "expectedValidationStatus": "valid",
+  "suggestedAgentQuestions": [
+    "Search for crawler security defaults, read the relevant concepts, and cite the source resource.",
+    "Read the MCP setup concept and explain the stdio config.",
+    "Find importer concepts and list supported input formats."
+  ]
+}

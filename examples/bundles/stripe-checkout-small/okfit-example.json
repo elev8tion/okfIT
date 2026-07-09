@@ -1,0 +1,10 @@
+{
+  "sourceCommand": "npx -y okfit validate examples/bundles/stripe-checkout-small",
+  "expectedConceptCount": 4,
+  "expectedValidationStatus": "valid",
+  "suggestedAgentQuestions": [
+    "Search for Checkout Sessions, read the strongest match, and explain required server parameters.",
+    "Find webhook-related concepts and summarize fulfillment safety notes.",
+    "Use neighbors to move from the quickstart to the API reference and webhook concepts."
+  ]
+}
