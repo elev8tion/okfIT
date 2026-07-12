@@ -22,6 +22,7 @@
     <a href="#official-agent-skill">Agent skill</a> |
     <a href="#activation-packet">Activation packet</a> |
     <a href="#preview-the-inspector">Preview Inspector</a> |
+    <a href="#local-okfit-hub">Local Hub</a> |
     <a href="#project-stack-workspaces">Project stack workspaces</a> |
     <a href="#keep-sources-fresh">Keep sources fresh</a> |
     <a href="#create-a-bundle">Create a bundle</a> |
@@ -176,6 +177,28 @@ npx -y okfit map stripe clerk --out stack-inspector.html
 ```
 
 Use `--json` when CI or tests need the same Inspector report model without writing HTML.
+
+## Local OKFIT Hub
+
+Hub is a local source-aware dashboard and JSON API over registered sources and imported OKF bundles. It lets you search every source in the active `OKFIT_HOME`, trace concepts with `source:concept` refs, export the merged graph, and expose the same local surface to agents through MCP.
+
+Hub is not a cloud service, not a managed service, and not account-based. It reads registered sources from `$OKFIT_HOME/sources`, stores Hub imports under `$OKFIT_HOME/hub/imports`, and defaults to `~/.okfit` when `OKFIT_HOME` is not set.
+
+```bash
+npx -y okfit hub
+npx -y okfit dashboard
+npx -y okfit hub import ./docs-okf --name project-docs
+npx -y okfit hub search "checkout sessions"
+npx -y okfit hub trace stripe:reference/api
+npx -y okfit hub export graph
+npx -y okfit hub mcp
+```
+
+Use `okfit serve ... --mcp` when a session should use one explicit source or selected workspace. Use `okfit hub mcp` when the agent should access the full local Hub surface across every readable registered source and Hub import.
+
+The dashboard/API includes `/api/overview`, `/api/search?q=...`, `/api/trace?ref=source:concept`, `/api/orphans`, `/graph.json`, `/llms.txt`, `/sitemap.xml`, `/mcp-manifest.json`, and `/api/mcp`.
+
+Full guide: [docs/hub.md](docs/hub.md).
 
 ## Project Stack Workspaces
 
@@ -450,6 +473,13 @@ okfit validate <bundle>
 okfit inspect <bundle>
 okfit activate <name-or-bundle> [more-source-names...] --client codex --out okfit-activation
 okfit map <name-or-bundle> [more-source-names...] --out okfit-inspector.html
+okfit hub
+okfit dashboard
+okfit hub import <path> --name <name>
+okfit hub search <query>
+okfit hub trace <source:concept>
+okfit hub export graph
+okfit hub mcp
 okfit serve <name-or-bundle> [more-source-names...] --mcp
 okfit demo
 ```
@@ -466,6 +496,11 @@ okfit import ./docs --out ./docs-okf --source-name "Project docs" --force
 okfit validate ./docs-okf --json
 okfit activate stripe --client codex --task "checkout sessions" --out okfit-activation
 okfit map stripe --out okfit-inspector.html
+okfit hub import ./docs-okf --name project-docs
+okfit hub search "checkout sessions"
+okfit hub trace stripe:reference/api
+okfit hub export graph
+okfit hub mcp
 okfit serve ./docs-okf --mcp --max-result-chars 12000
 ```
 

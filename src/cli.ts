@@ -9,6 +9,15 @@ import {
   runValidateCommand
 } from "./cli-content-actions.js";
 import {
+  runDashboardCommand,
+  runHubCommand,
+  runHubExportCommand,
+  runHubImportCommand,
+  runHubMcpCommand,
+  runHubSearchCommand,
+  runHubTraceCommand
+} from "./cli-hub-actions.js";
+import {
   runAddCommand,
   runCheckCommand,
   runDoctorCommand,
@@ -29,6 +38,8 @@ import {
   runMapCommand,
   runServeCommand
 } from "./cli-workspace-actions.js";
+import { runConnectCommand } from "./cli-connect-actions.js";
+import { runSetupCommand } from "./cli-setup-actions.js";
 
 const program = new Command();
 const cliPath = fileURLToPath(import.meta.url);
@@ -251,6 +262,106 @@ program
   .option("--out <file>", "Inspector HTML output file", "okfit-inspector.html")
   .option("--json", "Print Inspector report JSON without writing HTML", false)
   .action(runMapCommand);
+
+const hubCommand = program
+  .command("hub")
+  .description("Start the OKFIT central memory hub dashboard and JSON API")
+  .option("--host <host>", "Host interface", "127.0.0.1")
+  .option("--port <n>", "HTTP port", positiveIntegerOption("port"), 8765)
+  .option("--json", "Print hub overview JSON without starting a server", false)
+  .option("--demo", "Serve the dashboard with sample data (no import required)", false)
+  .action((options: any) => runHubCommand(options, packageRoot));
+
+hubCommand
+  .command("import")
+  .description("Import an OKF bundle or local docs folder into the hub")
+  .argument("<path>", "OKF bundle or outside-project docs path to import into the hub")
+  .option("--name <name>", "Hub source name")
+  .option("--include <glob>", "Include glob for non-OKF local imports", collect, [])
+  .option("--exclude <glob>", "Exclude glob for non-OKF local imports", collect, [])
+  .option("--force", "Replace an existing hub import with the same name", false)
+  .option(
+    "--dangerously-allow-unsafe-output",
+    "Dangerously allow importer output safety bypass for converted local imports",
+    false
+  )
+  .option("--stable-timestamps", "Use a deterministic timestamp in generated frontmatter", false)
+  .option("--json", "Print JSON output", false)
+  .action(runHubImportCommand);
+
+hubCommand
+  .command("search")
+  .description("Search every concept across all hub sources")
+  .argument("<query>", "Global hub search query")
+  .option("--source <name>", "Filter by source name")
+  .option("--type <type>", "Filter by concept type")
+  .option("--tag <tag>", "Filter by tag", collect, [])
+  .option("--limit <n>", "Maximum results", positiveIntegerOption("limit"), 10)
+  .option("--json", "Print JSON output", false)
+  .action(runHubSearchCommand);
+
+hubCommand
+  .command("trace")
+  .description("Trace a concept's creation path, dependencies, and dependents")
+  .argument("<ref-or-id>", "Concept ref (source:id) or id")
+  .option("--source <name>", "Source name for id-only trace")
+  .option("--json", "Print JSON output", false)
+  .action(runHubTraceCommand);
+
+hubCommand
+  .command("export")
+  .description("Export the hub graph, overview, llms.txt, or sitemap without starting a server")
+  .argument("<kind>", "Export kind: graph, overview, llms, sitemap")
+  .option("--base-url <url>", "Base URL for crawlable exports")
+  .option("--host <host>", "Host used for default base URL", "127.0.0.1")
+  .option("--port <n>", "Port used for default base URL", positiveIntegerOption("port"), 8765)
+  .action(runHubExportCommand);
+
+hubCommand
+  .command("mcp")
+  .description("Start the central hub MCP server over stdio")
+  .option("--transport <transport>", "Transport: stdio", "stdio")
+  .option("--name <server-name>", "MCP server name", "okfit-hub")
+  .option(
+    "--max-result-chars <n>",
+    "Maximum characters per tool result",
+    positiveIntegerOption("max-result-chars"),
+    12000
+  )
+  .action(runHubMcpCommand);
+
+program
+  .command("dashboard")
+  .description("Alias for okfit hub")
+  .option("--host <host>", "Host interface", "127.0.0.1")
+  .option("--port <n>", "HTTP port", positiveIntegerOption("port"), 8765)
+  .option("--json", "Print hub overview JSON without starting a server", false)
+  .option("--demo", "Serve the dashboard with sample data (no import required)", false)
+  .action((options: any) => runDashboardCommand(options, packageRoot));
+
+program
+  .command("connect")
+  .description("Register the okfit Hub MCP server with an AI coding client")
+  .argument("<client>", "codex | claude | cursor | pi")
+  .option("--name <name>", "MCP server name", "okfit")
+  .option("--scope <scope>", "user | project (for claude/cursor)", "user")
+  .option("--force", "Overwrite existing entry", false)
+  .option("--dry-run", "Print what would change without writing", false)
+  .option("--json", "Print JSON result", false)
+  .action(runConnectCommand);
+
+program
+  .command("setup")
+  .description("One-command: register + crawl + activate + import into hub")
+  .argument("<target>", "URL or local path")
+  .requiredOption("--name <name>", "Source name (required)")
+  .option("--client <client>", "generic | claude | codex | cursor | pi", "generic")
+  .option("--out <dir>", "Activation output directory", "okfit-activation")
+  .option("--force", "Overwrite existing", false)
+  .option("--probe", "Run MCP probe (default)", true)
+  .option("--no-probe", "Skip MCP probe")
+  .option("--json", "JSON output", false)
+  .action((target, opts) => runSetupCommand(target, opts, cliPath));
 
 program
   .command("serve")

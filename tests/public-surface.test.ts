@@ -94,6 +94,9 @@ describe("public surface", () => {
       readme.indexOf("## Preview The Inspector")
     );
     expect(readme.indexOf("## Preview The Inspector")).toBeLessThan(
+      readme.indexOf("## Local OKFIT Hub")
+    );
+    expect(readme.indexOf("## Local OKFIT Hub")).toBeLessThan(
       readme.indexOf("## Project Stack Workspaces")
     );
     expect(readme).toContain(
@@ -106,6 +109,15 @@ describe("public surface", () => {
     expect(readme).toContain("Preview what your agent will know");
     expect(readme).toContain("npx -y okfit map stripe --out okfit-inspector.html");
     expect(readme).toContain("local static HTML Inspector");
+    expect(readme).toContain("## Local OKFIT Hub");
+    expect(readme).toContain("npx -y okfit hub");
+    expect(readme).toContain("npx -y okfit dashboard");
+    expect(readme).toContain("npx -y okfit hub import ./docs-okf --name project-docs");
+    expect(readme).toContain('npx -y okfit hub search "checkout sessions"');
+    expect(readme).toContain("npx -y okfit hub trace stripe:reference/api");
+    expect(readme).toContain("npx -y okfit hub export graph");
+    expect(readme).toContain("npx -y okfit hub mcp");
+    expect(readme).toContain("[docs/hub.md](docs/hub.md)");
     expect(readme).toContain(
       "Use `--json` when CI or tests need the same Inspector report model without writing HTML."
     );
@@ -168,6 +180,7 @@ describe("public surface", () => {
     expect(files).toContain("assets/demo.gif");
     expect(files).not.toContain("assets/logo.svg");
     expect(files).toContain("docs/mcp-clients.md");
+    expect(files).toContain("docs/hub.md");
     expect(files).toContain("examples/bundles/okfit-docs/index.md");
     expect(files).toContain("skills/okfit/SKILL.md");
     expect(files).toContain("skills/okfit/agents/openai.yaml");
@@ -199,6 +212,13 @@ describe("public surface", () => {
     expect(skill).toContain("npx -y okfit doctor <name>");
     expect(skill).toContain("npx -y okfit map <name-or-bundle>");
     expect(skill).toContain("npx -y okfit serve <name-or-bundle> --mcp --auto-refresh");
+    expect(skill).toContain("npx -y okfit hub");
+    expect(skill).toContain("npx -y okfit hub import <path> --name <name>");
+    expect(skill).toContain('npx -y okfit hub search "<query>"');
+    expect(skill).toContain("npx -y okfit hub trace <source:concept>");
+    expect(skill).toContain("npx -y okfit hub mcp");
+    expect(skill).toContain("## Hub Workflow");
+    expect(skill).toContain("Choose Hub for a local dashboard, cross-source memory, global search");
     expect(skill).toContain("bundle_summary");
     expect(skill).toContain("search_concepts");
     expect(skill).toContain("read_concept");
@@ -338,11 +358,12 @@ describe("public surface", () => {
   });
 
   it("documents the publishable npm package", async () => {
-    const [packageJson, readme, npmReadme, mcpDocs, examplesReadme] = await Promise.all([
+    const [packageJson, readme, npmReadme, mcpDocs, hubDocs, examplesReadme] = await Promise.all([
       fs.readFile("package.json", "utf8"),
       fs.readFile("README.md", "utf8"),
       fs.readFile("scripts/npm-readme.md", "utf8"),
       fs.readFile("docs/mcp-clients.md", "utf8"),
+      fs.readFile("docs/hub.md", "utf8"),
       fs.readFile("examples/README.md", "utf8")
     ]);
     const parsed = JSON.parse(packageJson) as {
@@ -351,8 +372,9 @@ describe("public surface", () => {
       main?: string;
       types?: string;
       exports?: Record<string, unknown>;
+      files?: string[];
     };
-    const publicCopy = `${readme}\n${npmReadme}\n${mcpDocs}\n${examplesReadme}`;
+    const publicCopy = `${readme}\n${npmReadme}\n${mcpDocs}\n${hubDocs}\n${examplesReadme}`;
 
     expect(parsed.name).toBe("okfit");
     expect(parsed.bin?.okfit).toBe("dist/cli.js");
@@ -367,6 +389,7 @@ describe("public surface", () => {
       types: "./dist/setup-artifacts.d.ts",
       import: "./dist/setup-artifacts.js"
     });
+    expect(parsed.files).toContain("docs/hub.md");
     await expect(
       execFileAsync(process.execPath, [
         "--input-type=module",
@@ -385,6 +408,12 @@ describe("public surface", () => {
     expect(readme).toContain("The MCP server exposes read-only tools.");
     expect(readme).toContain("okfit init <name> <url>");
     expect(readme).toContain("okfit doctor <name> [more-names...]");
+    expect(readme).toContain("okfit hub");
+    expect(readme).toContain("okfit dashboard");
+    expect(readme).toContain("okfit hub import <path> --name <name>");
+    expect(readme).toContain("okfit hub search <query>");
+    expect(readme).toContain("okfit hub trace <source:concept>");
+    expect(readme).toContain("okfit hub mcp");
     expect(readme).toContain(
       "okfit activate <name-or-bundle> [more-source-names...] --client codex --out okfit-activation"
     );
@@ -411,6 +440,13 @@ describe("public surface", () => {
     expect(npmReadme).toContain("okfit-proof.json");
     expect(npmReadme).toContain("npx -y okfit map stripe --out okfit-inspector.html");
     expect(npmReadme).toContain("local static HTML Inspector");
+    expect(npmReadme).toContain("npx -y okfit hub");
+    expect(npmReadme).toContain("npx -y okfit dashboard");
+    expect(npmReadme).toContain("npx -y okfit hub import ./docs-okf --name project-docs");
+    expect(npmReadme).toContain('npx -y okfit hub search "checkout sessions"');
+    expect(npmReadme).toContain("npx -y okfit hub trace stripe:reference/api");
+    expect(npmReadme).toContain("npx -y okfit hub export graph");
+    expect(npmReadme).toContain("npx -y okfit hub mcp");
     expect(npmReadme.indexOf("## Use With Agents")).toBeLessThan(
       npmReadme.indexOf("## Optional CLI Install")
     );
@@ -421,6 +457,9 @@ describe("public surface", () => {
       npmReadme.indexOf("## Preview The Inspector")
     );
     expect(npmReadme.indexOf("## Preview The Inspector")).toBeLessThan(
+      npmReadme.indexOf("## Local OKFIT Hub")
+    );
+    expect(npmReadme.indexOf("## Local OKFIT Hub")).toBeLessThan(
       npmReadme.indexOf("## Multi-Source Workspaces")
     );
     expect(npmReadme).toContain(
@@ -440,6 +479,10 @@ describe("public surface", () => {
     expect(npmReadme).toContain("Search and list tools accept a `source` filter");
     expect(npmReadme).toContain("okfit init <name> <url>");
     expect(npmReadme).toContain("okfit doctor <name> [more-names...]");
+    expect(npmReadme).toContain("okfit hub import <path> --name <name>");
+    expect(npmReadme).toContain("okfit hub search <query>");
+    expect(npmReadme).toContain("okfit hub trace <source:concept>");
+    expect(npmReadme).toContain("okfit hub mcp");
     expect(npmReadme).toContain("claude mcp add --transport stdio stripe-okf");
     expect(npmReadme).toContain("[mcp_servers.stripe_okf]");
     expect(npmReadme).toContain("skills/okfit/SKILL.md");
@@ -479,10 +522,40 @@ describe("public surface", () => {
     expect(mcpDocs).toContain(
       "Direct bundle paths, including local bundle workspaces, do not use source auto-refresh."
     );
+    expect(mcpDocs).toContain("## Hub MCP");
+    expect(mcpDocs).toContain("npx -y okfit hub mcp");
+    expect(mcpDocs).toContain("[mcp_servers.okfit_hub]");
+    expect(mcpDocs).toContain('args = ["-y", "okfit", "hub", "mcp"]');
+    expect(mcpDocs).toContain("bundle_summary\nsearch_concepts\nread_concept\nget_neighbors\nlist_types\nlist_tags");
+    expect(mcpDocs).toContain("npx -y okfit hub import ./docs-okf --name project-docs");
+    expect(mcpDocs).toContain("[docs/hub.md](hub.md)");
     expect(mcpDocs).toContain('args": ["-y", "okfit", "serve", "./docs-okf", "--mcp"]');
     expect(mcpDocs).toContain("search_concepts(query, source?, type?, tags?, limit?)");
     expect(mcpDocs).toContain("read_concept(id, source?, max_chars?)");
     expect(mcpDocs).toContain("get_neighbors(id, source?, depth?)");
+    expect(hubDocs).toContain("# OKFIT Hub");
+    expect(hubDocs).toContain("OKFIT_HOME");
+    expect(hubDocs).toContain("npx -y okfit hub");
+    expect(hubDocs).toContain("npx -y okfit dashboard");
+    expect(hubDocs).toContain("npx -y okfit hub import ./docs-okf --name project-docs");
+    expect(hubDocs).toContain('npx -y okfit hub search "checkout sessions"');
+    expect(hubDocs).toContain("npx -y okfit hub trace stripe:reference/api");
+    expect(hubDocs).toContain("npx -y okfit hub export graph");
+    expect(hubDocs).toContain("npx -y okfit hub mcp");
+    for (const endpoint of [
+      "/",
+      "/api/overview",
+      "/api/search?q=...",
+      "/api/trace?ref=source:concept",
+      "/api/orphans",
+      "/graph.json",
+      "/llms.txt",
+      "/sitemap.xml",
+      "/mcp-manifest.json",
+      "/api/mcp"
+    ]) {
+      expect(hubDocs).toContain(endpoint);
+    }
     expect(examplesReadme).toContain("Preview what your agent will know");
     expect(examplesReadme).toContain(
       "npx -y okfit activate examples/bundles/stripe-checkout-small --client codex --out stripe-activation"

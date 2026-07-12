@@ -2,18 +2,26 @@
 import {
   buildActivationPacket,
   buildBundleInspectorReport,
+  buildHubOverview,
+  buildHubSearch,
   buildWorkspaceInspectorReport,
   crawlWebsite,
   evaluateFreshness,
   hashBundleContents,
+  hubAuditLogPath,
   importLocal,
+  importPathIntoHub,
   parseDurationSeconds,
   protectedActivationInputPaths,
   refreshSource,
   renderActivationSetupMarkdown,
+  renderHubLlmsTxt,
+  renderHubSitemap,
+  serveHubMcpStdio,
+  startHubHttpServer,
   withActivationMetadata,
   writeActivationPacketFiles
-} from "./chunk-2KON5W5B.js";
+} from "./chunk-3EOHFTMY.js";
 import {
   MCP_TOOL_NAMES,
   assertUniqueWorkspaceRecordNames,
@@ -45,7 +53,7 @@ import {
   validateSourceName,
   writeRefreshState,
   writeSourceManifest
-} from "./chunk-R7KYCCQS.js";
+} from "./chunk-PZ2MNDGA.js";
 
 // src/cli.ts
 import { fileURLToPath } from "url";
@@ -304,13 +312,220 @@ async function runDemoCommand(packageRoot2) {
   console.log("3. Find importer concepts and list supported input formats.");
 }
 
+// src/cli-hub-actions.ts
+import { existsSync, rmSync } from "fs";
+import { mkdtemp } from "fs/promises";
+import os from "os";
+import path3 from "path";
+import pc3 from "picocolors";
+async function runHubCommand(options, packageRoot2) {
+  try {
+    const okfitHome = options.demo ? await seedDemoHub(packageRoot2) : void 0;
+    if (options.json) {
+      printJson(await buildHubOverview(okfitHome ? { okfitHome } : {}));
+      return;
+    }
+    const serverOptions = {
+      port: options.port,
+      host: options.host
+    };
+    if (okfitHome) serverOptions.okfitHome = okfitHome;
+    const server = await startHubHttpServer(serverOptions);
+    const address = server.address();
+    const actualPort = typeof address === "object" && address ? address.port : options.port;
+    const base = `http://${options.host}:${actualPort}`;
+    if (options.demo) {
+      console.log("okfit hub --demo");
+      console.log(pc3.green("  Sample data loaded into a temporary hub (discarded on exit)."));
+    } else {
+      console.log("okfit hub");
+    }
+    console.log(`Dashboard:  ${base}/  (open in your browser)`);
+    console.log(`OKFIT_HOME: ${okfitHome ?? hubAuditLogPath()}`);
+    console.log("");
+    console.log("JSON API & exports:");
+    console.log(`  ${base}/api/overview`);
+    console.log(`  ${base}/api/search?q=...`);
+    console.log(`  ${base}/api/trace?ref=source:concept`);
+    console.log(`  ${base}/api/orphans`);
+    console.log(`  ${base}/graph.json`);
+    console.log(`  ${base}/llms.txt`);
+    console.log(`  ${base}/mcp-manifest.json`);
+  } catch (error) {
+    console.error(pc3.red(error?.message ?? "Hub failed."));
+    process.exitCode = 1;
+  }
+}
+async function runDashboardCommand(options, packageRoot2) {
+  await runHubCommand(options, packageRoot2);
+}
+async function seedDemoHub(packageRoot2) {
+  const tmpHome = await mkdtemp(path3.join(os.tmpdir(), "okfit-demo-"));
+  let seeded = 0;
+  const bundles = [
+    ["okfit-docs", "okfit-docs"],
+    ["stripe", "stripe-checkout-small"]
+  ];
+  for (const [name, dir] of bundles) {
+    const bundle = resolveExampleBundle(packageRoot2, dir);
+    if (!bundle) continue;
+    await importPathIntoHub(bundle, { okfitHome: tmpHome, name, force: true });
+    seeded++;
+  }
+  const cleanup = () => {
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {
+    }
+  };
+  process.once("exit", cleanup);
+  const stop = () => {
+    cleanup();
+    process.exit(0);
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  if (seeded === 0) {
+    console.error(pc3.yellow("  No example bundles found; serving an empty hub."));
+  }
+  return tmpHome;
+}
+function resolveExampleBundle(packageRoot2, dir) {
+  const rel = path3.join("examples", "bundles", dir);
+  if (existsSync(rel)) return rel;
+  const abs = path3.join(packageRoot2, rel);
+  return existsSync(abs) ? abs : void 0;
+}
+async function runHubMcpCommand(options) {
+  if (options.transport !== "stdio") {
+    console.error(pc3.red("Only stdio transport is supported for hub MCP."));
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    console.error(`okfit hub mcp: starting stdio server "${options.name}"`);
+    await serveHubMcpStdio({ name: options.name, maxResultChars: options.maxResultChars });
+  } catch (error) {
+    console.error(pc3.red(error?.message ?? "Hub MCP failed."));
+    process.exitCode = 1;
+  }
+}
+async function runHubImportCommand(inputPath, options) {
+  try {
+    const result = await importPathIntoHub(inputPath, {
+      name: options.name,
+      force: options.force,
+      include: options.include,
+      exclude: options.exclude,
+      stableTimestamp: options.stableTimestamps ? "2026-06-14T00:00:00.000Z" : void 0,
+      dangerouslyAllowUnsafeOutput: options.dangerouslyAllowUnsafeOutput
+    });
+    if (options.json) {
+      printJson({ status: "imported", ...result });
+      return;
+    }
+    console.log("okfit hub import");
+    console.log(`Mode: ${result.mode}`);
+    console.log(`Name: ${result.record.name}`);
+    console.log(`Concepts: ${result.conceptCount}`);
+    console.log(`Bundle: ${result.record.bundleDir}`);
+  } catch (error) {
+    if (options.json) printJson({ status: "failed", error: { message: error?.message ?? "Hub import failed." } });
+    else console.error(pc3.red(error?.message ?? "Hub import failed."));
+    process.exitCode = 1;
+  }
+}
+async function runHubSearchCommand(query, options) {
+  try {
+    const search = await buildHubSearch();
+    const results = search.search(query, {
+      source: options.source,
+      type: options.type,
+      tags: options.tag,
+      limit: options.limit
+    });
+    if (options.json) {
+      printJson(results);
+      return;
+    }
+    for (const result of results) {
+      console.log(`${result.ref} \u2014 ${result.title ?? result.id}`);
+      console.log(`  ${result.type} \xB7 ${result.tags.join(", ")}`);
+      if (result.snippet) console.log(`  ${result.snippet}`);
+    }
+  } catch (error) {
+    if (options.json) printJson({ status: "failed", error: { message: error?.message ?? "Hub search failed." } });
+    else console.error(pc3.red(error?.message ?? "Hub search failed."));
+    process.exitCode = 1;
+  }
+}
+async function runHubTraceCommand(ref, options) {
+  try {
+    const search = await buildHubSearch();
+    const trace = search.trace(ref, options.source);
+    if (options.json) {
+      printJson(trace);
+      return;
+    }
+    console.log(`Trace: ${trace.ref}`);
+    if (trace.concept) {
+      console.log(`Title: ${trace.concept.title ?? trace.concept.id}`);
+      console.log(`Source: ${trace.concept.sourceName}`);
+      console.log(`Type: ${trace.concept.type}`);
+    }
+    console.log("");
+    console.log("Creation paths:");
+    for (const item of trace.creationPath) console.log(`  ${item.path.join(" -> ")}`);
+    if (!trace.creationPath.length) console.log("  none");
+    console.log("Depends on:");
+    for (const item of trace.dependencies) console.log(`  ${item}`);
+    if (!trace.dependencies.length) console.log("  none");
+    console.log("Dependents:");
+    for (const item of trace.dependents) console.log(`  ${item}`);
+    if (!trace.dependents.length) console.log("  none");
+    if (trace.sameIdAcrossSources.length) {
+      console.log("Same concept id across sources:");
+      for (const item of trace.sameIdAcrossSources) console.log(`  ${item}`);
+    }
+  } catch (error) {
+    if (options.json) printJson({ status: "failed", error: { message: error?.message ?? "Hub trace failed." } });
+    else console.error(pc3.red(error?.message ?? "Hub trace failed."));
+    process.exitCode = 1;
+  }
+}
+async function runHubExportCommand(kind, options) {
+  try {
+    const baseUrl = options.baseUrl ?? `http://${options.host ?? "127.0.0.1"}:${options.port ?? 8765}`;
+    if (kind === "graph") {
+      printJson((await buildHubSearch()).toJSONGraph());
+      return;
+    }
+    if (kind === "overview") {
+      printJson(await buildHubOverview());
+      return;
+    }
+    if (kind === "llms") {
+      console.log(renderHubLlmsTxt(baseUrl));
+      return;
+    }
+    if (kind === "sitemap") {
+      console.log(renderHubSitemap(baseUrl));
+      return;
+    }
+    throw new Error("Export kind must be graph, overview, llms, or sitemap.");
+  } catch (error) {
+    console.error(pc3.red(error?.message ?? "Hub export failed."));
+    process.exitCode = 1;
+  }
+}
+
 // src/cli-source-actions.ts
 import fs4 from "fs";
-import pc3 from "picocolors";
+import pc4 from "picocolors";
 
 // src/source-lifecycle.ts
 import fs3 from "fs";
-import path3 from "path";
+import path4 from "path";
 async function pathExists(target) {
   try {
     await fs3.promises.access(target);
@@ -348,7 +563,7 @@ function manifestFromOptions(name, seedUrl, options) {
       minIntervalSeconds: options.minRefreshInterval
     },
     bundle: {
-      dir: options.out ? path3.resolve(options.out) : "bundle"
+      dir: options.out ? path4.resolve(options.out) : "bundle"
     }
   };
 }
@@ -513,10 +728,10 @@ function mcpRefreshHooksForRecord(record, mode, maxAgeSeconds) {
 
 // src/setup-diagnostics.ts
 import { execFile } from "child_process";
-import path4 from "path";
+import path5 from "path";
 function setupHomeCheck(okfitHome) {
   const defaultHome = defaultOkfitHome();
-  if (path4.resolve(okfitHome) === path4.resolve(defaultHome)) {
+  if (path5.resolve(okfitHome) === path5.resolve(defaultHome)) {
     return setupCheck(
       "source_home",
       "Source store",
@@ -854,7 +1069,7 @@ async function runInitCommand(name, url, options, cliPath2) {
   } catch (error) {
     if (options.json)
       printSetupReport(setupReportForInitFailure(name, options.client, error), true);
-    else console.error(pc3.red(error?.message ?? "Init failed."));
+    else console.error(pc4.red(error?.message ?? "Init failed."));
     process.exitCode = 1;
   }
 }
@@ -924,7 +1139,7 @@ async function runAddCommand(name, url, options) {
   } catch (error) {
     if (options.json)
       printJson({ status: "failed", error: { message: error?.message ?? "Add failed." } });
-    else console.error(pc3.red(error?.message ?? "Add failed."));
+    else console.error(pc4.red(error?.message ?? "Add failed."));
     process.exitCode = 1;
   }
 }
@@ -938,7 +1153,7 @@ async function runSourcesCommand(options) {
     else printSourceRows(rows);
   } catch (error) {
     if (options.json) printJson({ error: { message: error?.message ?? "Sources failed." } });
-    else console.error(pc3.red(error?.message ?? "Sources failed."));
+    else console.error(pc4.red(error?.message ?? "Sources failed."));
     process.exitCode = 1;
   }
 }
@@ -978,7 +1193,7 @@ async function runCheckCommand(target, options) {
   } catch (error) {
     if (options.json)
       printJson({ status: "failed", error: { message: error?.message ?? "Check failed." } });
-    else console.error(pc3.red(error?.message ?? "Check failed."));
+    else console.error(pc4.red(error?.message ?? "Check failed."));
     process.exitCode = 2;
   }
 }
@@ -1018,7 +1233,7 @@ async function runUpdateCommand(name, options) {
   } catch (error) {
     if (options.json)
       printJson({ status: "failed", error: { message: error?.message ?? "Update failed." } });
-    else console.error(pc3.red(error?.message ?? "Update failed."));
+    else console.error(pc4.red(error?.message ?? "Update failed."));
     process.exitCode = 1;
   }
 }
@@ -1035,18 +1250,18 @@ async function runRemoveCommand(name, options) {
   } catch (error) {
     if (options.json)
       printJson({ removed: false, name, error: { message: error?.message ?? "Remove failed." } });
-    else console.error(pc3.red(error?.message ?? "Remove failed."));
+    else console.error(pc4.red(error?.message ?? "Remove failed."));
     process.exitCode = 1;
   }
 }
 
 // src/cli-workspace-actions.ts
-import path6 from "path";
-import pc4 from "picocolors";
+import path7 from "path";
+import pc5 from "picocolors";
 
 // src/cli-targets.ts
 import fs5 from "fs";
-import path5 from "path";
+import path6 from "path";
 async function pathExists3(target) {
   try {
     await fs5.promises.access(target);
@@ -1057,7 +1272,7 @@ async function pathExists3(target) {
   }
 }
 function pathLikeTarget(target) {
-  return path5.isAbsolute(target) || target === "." || target === ".." || target.startsWith("./") || target.startsWith("../") || target.includes("/") || target.includes("\\");
+  return path6.isAbsolute(target) || target === "." || target === ".." || target.startsWith("./") || target.startsWith("../") || target.includes("/") || target.includes("\\");
 }
 async function registeredSourceDirExists(name) {
   try {
@@ -1586,7 +1801,7 @@ async function runActivateCommand(targets = [], options) {
   } catch (error) {
     if (options.json)
       printJson({ status: "failed", error: { message: error?.message ?? "Activate failed." } });
-    else console.error(pc4.red(error?.message ?? "Activate failed."));
+    else console.error(pc5.red(error?.message ?? "Activate failed."));
     process.exitCode = 1;
   }
 }
@@ -1598,7 +1813,7 @@ async function runMapCommand(targets = [], options) {
       printJson(report);
       return;
     }
-    const outputPath = path6.resolve(options.out);
+    const outputPath = path7.resolve(options.out);
     const html = renderInspectorHtml(report);
     await writeFileAtomically(outputPath, html);
     console.log(`Wrote OKFIT Inspector: ${outputPath}`);
@@ -1606,19 +1821,19 @@ async function runMapCommand(targets = [], options) {
     if (options.json) {
       printJson({ status: "failed", error: { message: error?.message ?? "Map failed." } });
     } else {
-      console.error(pc4.red(error?.message ?? "Map failed."));
+      console.error(pc5.red(error?.message ?? "Map failed."));
     }
     process.exitCode = 1;
   }
 }
 async function runServeCommand(targets = [], options) {
   if (!options.mcp) {
-    console.error(pc4.red("Only MCP server mode is supported. Pass --mcp to start stdio."));
+    console.error(pc5.red("Only MCP server mode is supported. Pass --mcp to start stdio."));
     process.exitCode = 1;
     return;
   }
   if (options.transport !== "stdio") {
-    console.error(pc4.red("Only stdio transport is supported."));
+    console.error(pc5.red("Only stdio transport is supported."));
     process.exitCode = 1;
     return;
   }
@@ -1667,7 +1882,322 @@ async function runServeCommand(targets = [], options) {
     printStatus("okfit serve: ready on stdio (stdout is reserved for MCP JSON-RPC)");
     printStatus(`okfit serve: tools ${MCP_TOOL_NAMES.join(", ")}`);
   } catch (error) {
-    console.error(pc4.red(error?.message ?? "Serve failed."));
+    console.error(pc5.red(error?.message ?? "Serve failed."));
+    process.exitCode = 1;
+  }
+}
+
+// src/cli-connect-actions.ts
+import { spawnSync } from "child_process";
+import fs6 from "fs";
+import os2 from "os";
+import path8 from "path";
+import pc6 from "picocolors";
+var MCP_COMMAND = "npx";
+var MCP_ARGS = ["-y", "okfit", "hub", "mcp"];
+async function runConnectCommand(client, options) {
+  const name = options.name ?? "okfit";
+  const scope = options.scope ?? "user";
+  const dryRun = !!options.dryRun;
+  const json = !!options.json;
+  const force = !!options.force;
+  try {
+    if (!["codex", "claude", "cursor", "pi"].includes(client)) {
+      throw new Error(`Unsupported client: ${client}. Use codex | claude | cursor | pi.`);
+    }
+    let result;
+    switch (client) {
+      case "claude":
+        result = await connectClaude(name, scope, dryRun, force);
+        break;
+      case "codex":
+        result = await connectCodex(name, dryRun, force);
+        break;
+      case "cursor":
+        result = await connectCursor(name, scope, dryRun, force);
+        break;
+      case "pi":
+        result = await connectPi(name, dryRun, force);
+        break;
+    }
+    if (json) {
+      printJson(result);
+    } else {
+      console.log(pc6.green(`Connected ${client} \u2192 ${name}`));
+      if (result.path) console.log(`Config: ${result.path}`);
+      if (result.action) console.log(`Action: ${result.action}`);
+      if (result.note) console.log(pc6.dim(result.note));
+    }
+  } catch (error) {
+    if (json) {
+      printJson({ status: "failed", client, name, error: error?.message ?? String(error) });
+    } else {
+      console.error(pc6.red(error?.message ?? "Connect failed."));
+    }
+    process.exitCode = 1;
+  }
+}
+async function connectClaude(name, scope, dryRun, force) {
+  const home = os2.homedir();
+  const configPath = path8.join(home, ".claude.json");
+  const claudeBin = spawnSync("which", ["claude"], { encoding: "utf8" }).stdout.trim();
+  if (claudeBin && !dryRun) {
+    const args = ["mcp", "add", name, "--scope", scope, "--", MCP_COMMAND, ...MCP_ARGS];
+    const r = spawnSync("claude", args, { stdio: "inherit" });
+    if (r.status === 0) {
+      return { status: "ok", client: "claude", name, path: configPath, action: "claude mcp add" };
+    }
+  }
+  let cfg = {};
+  if (fs6.existsSync(configPath)) {
+    try {
+      cfg = JSON.parse(fs6.readFileSync(configPath, "utf8"));
+    } catch {
+    }
+  }
+  const entry = { type: "stdio", command: MCP_COMMAND, args: MCP_ARGS };
+  if (scope === "project") {
+    const cwd = process.cwd();
+    if (!cfg.projects) cfg.projects = {};
+    if (!cfg.projects[cwd]) cfg.projects[cwd] = { mcpServers: {} };
+    if (cfg.projects[cwd].mcpServers?.[name] && !force) {
+      return { status: "exists", client: "claude", name, path: configPath, action: "skipped (exists)" };
+    }
+    cfg.projects[cwd].mcpServers[name] = entry;
+  } else {
+    if (!cfg.mcpServers) cfg.mcpServers = {};
+    if (cfg.mcpServers[name] && !force) {
+      return { status: "exists", client: "claude", name, path: configPath, action: "skipped (exists)" };
+    }
+    cfg.mcpServers[name] = entry;
+  }
+  if (!dryRun) {
+    fs6.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\n");
+  }
+  return { status: "ok", client: "claude", name, path: configPath, action: dryRun ? "dry-run" : "json-edit" };
+}
+async function connectCodex(name, dryRun, force) {
+  const home = os2.homedir();
+  const dir = path8.join(home, ".codex");
+  const configPath = path8.join(dir, "config.toml");
+  if (!fs6.existsSync(dir) && !dryRun) fs6.mkdirSync(dir, { recursive: true });
+  let content = fs6.existsSync(configPath) ? fs6.readFileSync(configPath, "utf8") : "";
+  const table = `[mcp_servers.${name}]`;
+  const cmdLine = `command = "${MCP_COMMAND}"`;
+  const argsLine = `args = ${JSON.stringify(MCP_ARGS)}`;
+  if (content.includes(table)) {
+    if (!force) {
+      return { status: "exists", client: "codex", name, path: configPath, action: "skipped (exists)" };
+    }
+    const re = new RegExp(`\\[mcp_servers\\.${name}\\][\\s\\S]*?(?=\\n\\[|$)`, "m");
+    content = content.replace(re, `${table}
+${cmdLine}
+${argsLine}
+`);
+  } else {
+    content += `
+${table}
+${cmdLine}
+${argsLine}
+`;
+  }
+  if (!dryRun) fs6.writeFileSync(configPath, content);
+  return { status: "ok", client: "codex", name, path: configPath, action: dryRun ? "dry-run" : "toml-edit" };
+}
+async function connectCursor(name, scope, dryRun, force) {
+  const home = os2.homedir();
+  const userPath = path8.join(home, ".cursor", "mcp.json");
+  const projectPath = path8.join(process.cwd(), ".cursor", "mcp.json");
+  const targetPath = scope === "project" ? projectPath : userPath;
+  if (scope === "project" && !fs6.existsSync(path8.dirname(projectPath)) && !dryRun) {
+    fs6.mkdirSync(path8.dirname(projectPath), { recursive: true });
+  }
+  let cfg = { mcpServers: {} };
+  if (fs6.existsSync(targetPath)) {
+    try {
+      cfg = JSON.parse(fs6.readFileSync(targetPath, "utf8"));
+    } catch {
+    }
+  }
+  if (!cfg.mcpServers) cfg.mcpServers = {};
+  const entry = { command: MCP_COMMAND, args: MCP_ARGS };
+  if (cfg.mcpServers[name] && !force) {
+    return { status: "exists", client: "cursor", name, path: targetPath, action: "skipped (exists)" };
+  }
+  cfg.mcpServers[name] = entry;
+  if (!dryRun) {
+    fs6.writeFileSync(targetPath, JSON.stringify(cfg, null, 2) + "\n");
+  }
+  return { status: "ok", client: "cursor", name, path: targetPath, action: dryRun ? "dry-run" : "json-edit" };
+}
+async function connectPi(name, dryRun, force) {
+  const home = os2.homedir();
+  const bridgePath = path8.join(home, ".pi", "mcp-manager", "servers.json");
+  if (!fs6.existsSync(bridgePath)) {
+    const snippet = {
+      name,
+      kind: "stdio",
+      command: MCP_COMMAND,
+      args: MCP_ARGS,
+      cwd: process.cwd(),
+      description: "okfit hub mcp"
+    };
+    const note = `pi has no native MCP. Create ~/.pi/mcp-manager/servers.json and add:
+${JSON.stringify(snippet, null, 2)}`;
+    return { status: "manual", client: "pi", name, note };
+  }
+  let cfg = { servers: [] };
+  try {
+    cfg = JSON.parse(fs6.readFileSync(bridgePath, "utf8"));
+  } catch {
+  }
+  if (!cfg.servers) cfg.servers = [];
+  const entry = {
+    name,
+    kind: "stdio",
+    command: MCP_COMMAND,
+    args: MCP_ARGS,
+    cwd: process.cwd(),
+    description: "okfit hub mcp"
+  };
+  const idx = cfg.servers.findIndex((s) => s.name === name);
+  if (idx !== -1) {
+    if (!force) {
+      return { status: "exists", client: "pi", name, path: bridgePath, action: "skipped (exists)" };
+    }
+    cfg.servers[idx] = entry;
+  } else {
+    cfg.servers.push(entry);
+  }
+  if (!dryRun) fs6.writeFileSync(bridgePath, JSON.stringify(cfg, null, 2) + "\n");
+  return { status: "ok", client: "pi", name, path: bridgePath, action: dryRun ? "dry-run" : "json-edit" };
+}
+
+// src/cli-setup-actions.ts
+import pc7 from "picocolors";
+async function runSetupCommand(target, options, cliPath2) {
+  const name = options.name;
+  if (!name) {
+    console.error(pc7.red("Error: --name is required for setup."));
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    validateSourceName(name);
+  } catch (e) {
+    console.error(pc7.red(e.message));
+    process.exitCode = 1;
+    return;
+  }
+  const isUrl = /^https?:\/\//i.test(target);
+  const json = !!options.json;
+  const force = !!options.force;
+  const client = options.client ?? "generic";
+  const outDir = options.out ?? "okfit-activation";
+  const probe = options.probe !== false;
+  try {
+    let record;
+    let bundleDir;
+    if (isUrl) {
+      console.log(pc7.cyan("1/4"), "Registering and crawling website source...");
+      const { manifest, result } = await registerWebsiteSource(name, target, options, {
+        onProgress: printCrawlProgress
+      });
+      if (result.status !== "fresh") {
+        console.error(pc7.red(`Crawl did not complete successfully: ${result.status}`));
+        process.exitCode = 1;
+        return;
+      }
+      bundleDir = resolveBundleDir(manifest);
+      record = await registeredRecord(name);
+    } else {
+      console.log(pc7.cyan("1/4"), "Importing local path into hub...");
+      const res = await importPathIntoHub(target, {
+        name,
+        force,
+        include: options.include,
+        exclude: options.exclude
+      });
+      bundleDir = res.record.bundleDir;
+      record = res.record;
+    }
+    console.log(pc7.cyan("2/4"), "Building activation packet...");
+    const resolution = await resolveCliTargets([name], { all: false });
+    const report = await inspectorReportForResolution(resolution);
+    const activationInput = activationInputForResolution(resolution);
+    const packet = await buildActivationPacket({
+      ...activationInput,
+      report,
+      client,
+      outDir,
+      proofTask: options.task,
+      okfitHome: resolveOkfitHome()
+    });
+    const reportWithMeta = withActivationMetadata(report, packet);
+    await writeActivationPacketFiles(
+      packet,
+      {
+        inspectorHtml: renderInspectorHtml(reportWithMeta),
+        setupMarkdown: renderActivationSetupMarkdown(packet)
+      },
+      { force, protectedInputPaths: activationInput.protectedInputPaths }
+    );
+    if (isUrl) {
+      console.log(pc7.cyan("3/4"), "Importing bundle into hub...");
+      await importPathIntoHub(bundleDir, { name, force });
+    } else {
+      console.log(pc7.cyan("3/4"), "Local import complete.");
+    }
+    let setupReport = null;
+    if (probe) {
+      console.log(pc7.cyan("4/4"), "Verifying MCP endpoint...");
+      setupReport = await setupReportForRecord({
+        record,
+        client,
+        maxAge: options.maxAge,
+        probeTimeoutSeconds: options.probeTimeout ?? 5,
+        cliPath: cliPath2
+      });
+    } else {
+      console.log(pc7.cyan("4/4"), "Skipping MCP probe (--no-probe).");
+    }
+    const payload = {
+      status: "ready",
+      name,
+      bundleDir,
+      activationDir: packet.outDir,
+      command: packet.setup.command,
+      firstPrompt: packet.setup.firstPrompt,
+      setupReport: setupReport ? setupReport : void 0
+    };
+    if (json) {
+      printJson(payload);
+    } else {
+      console.log(pc7.green(`
+\u2713 agents can now use '${name}'`));
+      console.log(`Bundle: ${bundleDir}`);
+      console.log(`Activation: ${packet.outDir}`);
+      if (packet.setup.command) {
+        console.log("\nMCP launch command:");
+        console.log(`  ${packet.setup.command.display}`);
+      }
+      if (packet.setup.firstPrompt) {
+        console.log("\nFirst prompt:");
+        console.log(packet.setup.firstPrompt);
+      }
+      console.log("\nNext:");
+      console.log(`  okfit hub`);
+      console.log(`  okfit serve ${name} --mcp`);
+    }
+    if (setupReport && setupReport.status === "failed") {
+      process.exitCode = 1;
+    }
+  } catch (error) {
+    if (json) {
+      printJson({ status: "failed", error: { message: error?.message ?? "Setup failed." } });
+    } else {
+      console.error(pc7.red(error?.message ?? "Setup failed."));
+    }
     process.exitCode = 1;
   }
 }
@@ -1758,6 +2288,24 @@ program.command("map").argument(
   "[targets...]",
   "Registered source name(s), OKF bundle path(s), or one OKF bundle directory"
 ).option("--all", "Map all registered sources as one source-aware workspace", false).option("--out <file>", "Inspector HTML output file", "okfit-inspector.html").option("--json", "Print Inspector report JSON without writing HTML", false).action(runMapCommand);
+var hubCommand = program.command("hub").description("Start the OKFIT central memory hub dashboard and JSON API").option("--host <host>", "Host interface", "127.0.0.1").option("--port <n>", "HTTP port", positiveIntegerOption("port"), 8765).option("--json", "Print hub overview JSON without starting a server", false).option("--demo", "Serve the dashboard with sample data (no import required)", false).action((options) => runHubCommand(options, packageRoot));
+hubCommand.command("import").description("Import an OKF bundle or local docs folder into the hub").argument("<path>", "OKF bundle or outside-project docs path to import into the hub").option("--name <name>", "Hub source name").option("--include <glob>", "Include glob for non-OKF local imports", collect, []).option("--exclude <glob>", "Exclude glob for non-OKF local imports", collect, []).option("--force", "Replace an existing hub import with the same name", false).option(
+  "--dangerously-allow-unsafe-output",
+  "Dangerously allow importer output safety bypass for converted local imports",
+  false
+).option("--stable-timestamps", "Use a deterministic timestamp in generated frontmatter", false).option("--json", "Print JSON output", false).action(runHubImportCommand);
+hubCommand.command("search").description("Search every concept across all hub sources").argument("<query>", "Global hub search query").option("--source <name>", "Filter by source name").option("--type <type>", "Filter by concept type").option("--tag <tag>", "Filter by tag", collect, []).option("--limit <n>", "Maximum results", positiveIntegerOption("limit"), 10).option("--json", "Print JSON output", false).action(runHubSearchCommand);
+hubCommand.command("trace").description("Trace a concept's creation path, dependencies, and dependents").argument("<ref-or-id>", "Concept ref (source:id) or id").option("--source <name>", "Source name for id-only trace").option("--json", "Print JSON output", false).action(runHubTraceCommand);
+hubCommand.command("export").description("Export the hub graph, overview, llms.txt, or sitemap without starting a server").argument("<kind>", "Export kind: graph, overview, llms, sitemap").option("--base-url <url>", "Base URL for crawlable exports").option("--host <host>", "Host used for default base URL", "127.0.0.1").option("--port <n>", "Port used for default base URL", positiveIntegerOption("port"), 8765).action(runHubExportCommand);
+hubCommand.command("mcp").description("Start the central hub MCP server over stdio").option("--transport <transport>", "Transport: stdio", "stdio").option("--name <server-name>", "MCP server name", "okfit-hub").option(
+  "--max-result-chars <n>",
+  "Maximum characters per tool result",
+  positiveIntegerOption("max-result-chars"),
+  12e3
+).action(runHubMcpCommand);
+program.command("dashboard").description("Alias for okfit hub").option("--host <host>", "Host interface", "127.0.0.1").option("--port <n>", "HTTP port", positiveIntegerOption("port"), 8765).option("--json", "Print hub overview JSON without starting a server", false).option("--demo", "Serve the dashboard with sample data (no import required)", false).action((options) => runDashboardCommand(options, packageRoot));
+program.command("connect").description("Register the okfit Hub MCP server with an AI coding client").argument("<client>", "codex | claude | cursor | pi").option("--name <name>", "MCP server name", "okfit").option("--scope <scope>", "user | project (for claude/cursor)", "user").option("--force", "Overwrite existing entry", false).option("--dry-run", "Print what would change without writing", false).option("--json", "Print JSON result", false).action(runConnectCommand);
+program.command("setup").description("One-command: register + crawl + activate + import into hub").argument("<target>", "URL or local path").requiredOption("--name <name>", "Source name (required)").option("--client <client>", "generic | claude | codex | cursor | pi", "generic").option("--out <dir>", "Activation output directory", "okfit-activation").option("--force", "Overwrite existing", false).option("--probe", "Run MCP probe (default)", true).option("--no-probe", "Skip MCP probe").option("--json", "JSON output", false).action((target, opts) => runSetupCommand(target, opts, cliPath));
 program.command("serve").argument(
   "[targets...]",
   "Registered source name(s), OKF bundle path(s), or one OKF bundle directory"

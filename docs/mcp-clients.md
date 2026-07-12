@@ -179,6 +179,57 @@ npx -y okfit serve stripe --mcp --auto-refresh --refresh-mode blocking
 
 Use `--refresh-mode off` when MCP serving should never trigger network fetches. You can still refresh explicitly with `npx -y okfit update stripe`.
 
+## Hub MCP
+
+Use `okfit serve ... --mcp` when an agent should use one explicit source, one local bundle, or one selected workspace. Use `okfit hub mcp` when the agent should access the full local Hub surface across every readable registered source and Hub import in the active `OKFIT_HOME`.
+
+Start the Hub MCP server over stdio:
+
+```bash
+npx -y okfit hub mcp
+```
+
+Codex config example:
+
+```toml
+[mcp_servers.okfit_hub]
+command = "npx"
+args = ["-y", "okfit", "hub", "mcp"]
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+enabled = true
+```
+
+For JSON-based clients, the same command shape is:
+
+```json
+{
+  "mcpServers": {
+    "okfit-hub": {
+      "command": "npx",
+      "args": ["-y", "okfit", "hub", "mcp"]
+    }
+  }
+}
+```
+
+The source-aware MCP tools remain:
+
+```text
+bundle_summary
+search_concepts
+read_concept
+get_neighbors
+list_types
+list_tags
+```
+
+Start with `bundle_summary` to see available sources and totals, call `search_concepts` with the task terms, then pass both `source` and `id` to `read_concept` when a concept id could exist in multiple sources. Use `get_neighbors` for links, backlinks, prerequisites, and nearby API/reference pages.
+
+Hub MCP is read-only. Use CLI commands such as `npx -y okfit hub import ./docs-okf --name project-docs` or `npx -y okfit add stripe https://docs.stripe.com/checkout` to change the local Hub surface before launching the MCP server.
+
+Full Hub guide: [docs/hub.md](hub.md).
+
 ## Existing Bundle Paths
 
 The existing crawl/import workflow still works for one-off snapshots and project-local bundles:

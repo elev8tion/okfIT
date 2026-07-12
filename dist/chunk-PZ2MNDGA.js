@@ -459,6 +459,286 @@ async function inspectBundle(bundleDir) {
   };
 }
 
+// src/mcp-contract.ts
+import { z } from "zod";
+var MCP_TOOL_NAMES = [
+  "search_concepts",
+  "read_concept",
+  "get_neighbors",
+  "list_types",
+  "list_tags",
+  "bundle_summary"
+];
+var [
+  SEARCH_CONCEPTS_TOOL,
+  READ_CONCEPT_TOOL,
+  GET_NEIGHBORS_TOOL,
+  LIST_TYPES_TOOL,
+  LIST_TAGS_TOOL,
+  BUNDLE_SUMMARY_TOOL
+] = MCP_TOOL_NAMES;
+var REFRESHABLE_TOOL_NAMES = new Set(
+  MCP_TOOL_NAMES.filter((tool) => tool !== BUNDLE_SUMMARY_TOOL)
+);
+function refreshableTool(name) {
+  return REFRESHABLE_TOOL_NAMES.has(name);
+}
+var searchSchema = z.object({
+  query: z.string(),
+  type: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  limit: z.number().int().positive().max(50).optional()
+});
+var readSchema = z.object({
+  id: z.string(),
+  max_chars: z.number().int().positive().optional()
+});
+var neighborsSchema = z.object({
+  id: z.string(),
+  depth: z.number().int().min(1).max(2).optional()
+});
+var sourceFilterSchema = z.object({ source: z.string().optional() });
+var workspaceSearchSchema = searchSchema.extend({ source: z.string().optional() });
+var workspaceReadSchema = readSchema.extend({ source: z.string().optional() });
+var workspaceNeighborsSchema = neighborsSchema.extend({ source: z.string().optional() });
+var stringInputProperty = { type: "string" };
+var sourceInputProperty = { type: "string" };
+var tagsInputProperty = { type: "array", items: { type: "string" } };
+var limitInputProperty = { type: "integer", minimum: 1, maximum: 50, default: 10 };
+var maxCharsInputProperty = { type: "integer", minimum: 1 };
+var depthInputProperty = { type: "integer", minimum: 1, maximum: 2, default: 1 };
+function withOptionalSourceInputSchema(schema, sourcePosition = "first") {
+  if (sourcePosition === "afterQuery" && "query" in schema.properties) {
+    const { query, ...properties } = schema.properties;
+    return { ...schema, properties: { query, source: sourceInputProperty, ...properties } };
+  }
+  return { ...schema, properties: { source: sourceInputProperty, ...schema.properties } };
+}
+var searchInputSchema = {
+  type: "object",
+  properties: {
+    query: stringInputProperty,
+    type: stringInputProperty,
+    tags: tagsInputProperty,
+    limit: limitInputProperty
+  },
+  required: ["query"]
+};
+var readInputSchema = {
+  type: "object",
+  properties: { id: stringInputProperty, max_chars: maxCharsInputProperty },
+  required: ["id"]
+};
+var neighborsInputSchema = {
+  type: "object",
+  properties: {
+    id: stringInputProperty,
+    depth: depthInputProperty
+  },
+  required: ["id"]
+};
+var sourceFilterInputSchema = {
+  type: "object",
+  properties: { source: sourceInputProperty }
+};
+var workspaceSearchInputSchema = withOptionalSourceInputSchema(searchInputSchema, "afterQuery");
+var workspaceReadInputSchema = withOptionalSourceInputSchema(readInputSchema);
+var workspaceNeighborsInputSchema = withOptionalSourceInputSchema(neighborsInputSchema);
+function mcpToolDefinitions(mode) {
+  if (mode === "bundle") {
+    return [
+      {
+        name: SEARCH_CONCEPTS_TOOL,
+        description: "Search OKF concepts by query, type, and tags.",
+        inputSchema: searchInputSchema
+      },
+      {
+        name: READ_CONCEPT_TOOL,
+        description: "Read one OKF concept by id or path.",
+        inputSchema: readInputSchema
+      },
+      {
+        name: GET_NEIGHBORS_TOOL,
+        description: "Return outbound links and backlinks for a concept.",
+        inputSchema: neighborsInputSchema
+      },
+      {
+        name: LIST_TYPES_TOOL,
+        description: "List concept types and counts.",
+        inputSchema: { type: "object", properties: {} }
+      },
+      {
+        name: LIST_TAGS_TOOL,
+        description: "List concept tags and counts.",
+        inputSchema: { type: "object", properties: {} }
+      },
+      {
+        name: BUNDLE_SUMMARY_TOOL,
+        description: "Return bundle stats and validation status.",
+        inputSchema: { type: "object", properties: {} }
+      }
+    ];
+  }
+  return [
+    {
+      name: SEARCH_CONCEPTS_TOOL,
+      description: "Search workspace OKF concepts by query, source, type, and tags.",
+      inputSchema: workspaceSearchInputSchema
+    },
+    {
+      name: READ_CONCEPT_TOOL,
+      description: "Read one workspace OKF concept by source and id. Id-only reads work when the id is unique.",
+      inputSchema: workspaceReadInputSchema
+    },
+    {
+      name: GET_NEIGHBORS_TOOL,
+      description: "Return outbound links and backlinks for a workspace concept.",
+      inputSchema: workspaceNeighborsInputSchema
+    },
+    {
+      name: LIST_TYPES_TOOL,
+      description: "List workspace concept types and counts.",
+      inputSchema: sourceFilterInputSchema
+    },
+    {
+      name: LIST_TAGS_TOOL,
+      description: "List workspace concept tags and counts.",
+      inputSchema: sourceFilterInputSchema
+    },
+    {
+      name: BUNDLE_SUMMARY_TOOL,
+      description: "Return workspace stats, per-source validation, and freshness status.",
+      inputSchema: sourceFilterInputSchema
+    }
+  ];
+}
+
+// src/search.ts
+import MiniSearch from "minisearch";
+function snippet(concept, query, max = 240) {
+  const text = `${concept.description ?? ""} ${concept.body}`.replace(/\s+/g, " ").trim();
+  const lower = text.toLowerCase();
+  const term = query.toLowerCase().split(/\s+/).find(Boolean) ?? "";
+  const index = term ? lower.indexOf(term) : -1;
+  const start = Math.max(0, index - 80);
+  return text.slice(start, start + max);
+}
+var STOPWORDS = /* @__PURE__ */ new Set([
+  "about",
+  "after",
+  "and",
+  "are",
+  "can",
+  "could",
+  "does",
+  "for",
+  "from",
+  "had",
+  "has",
+  "have",
+  "how",
+  "into",
+  "onto",
+  "should",
+  "that",
+  "the",
+  "their",
+  "there",
+  "this",
+  "what",
+  "when",
+  "where",
+  "who",
+  "why",
+  "with",
+  "would",
+  "you",
+  "your"
+]);
+function meaningfulQueryTerms(query) {
+  const terms = /* @__PURE__ */ new Set();
+  for (const token of query.match(/[A-Za-z0-9]+/g) ?? []) {
+    const normalized = token.toLowerCase();
+    const isAcronym = normalized.length >= 2 && ["api", "cli", "mcp", "okf", "sdk"].includes(normalized);
+    if ((normalized.length >= 4 || isAcronym) && !STOPWORDS.has(normalized)) {
+      terms.add(normalized);
+    }
+  }
+  return terms;
+}
+function matchesMeaningfulQueryTerm(hit, terms) {
+  if (terms.size === 0) return false;
+  return (hit.queryTerms ?? []).some((term) => terms.has(term.toLowerCase()));
+}
+var BundleSearch = class _BundleSearch {
+  graph;
+  index;
+  constructor(conceptsByAnyKey) {
+    this.graph = buildGraph(conceptsByAnyKey);
+    this.index = new MiniSearch({
+      fields: ["title", "description", "tags", "type", "body"],
+      storeFields: ["id"],
+      searchOptions: {
+        boost: { title: 4, tags: 3, type: 2, description: 2 },
+        fuzzy: 0.2,
+        prefix: true
+      }
+    });
+    this.index.addAll(
+      [...this.graph.concepts.values()].map((concept) => ({
+        id: concept.id,
+        title: concept.title ?? concept.id,
+        type: concept.type,
+        description: concept.description ?? "",
+        tags: concept.tags.join(" "),
+        body: concept.body
+      }))
+    );
+  }
+  static async fromBundle(bundleDir) {
+    return new _BundleSearch(await readBundle(bundleDir));
+  }
+  search(query, options = {}) {
+    const limit = options.limit ?? 10;
+    const trimmedQuery = query.trim();
+    const strict = this.resultsForHits(
+      this.index.search(trimmedQuery || MiniSearch.wildcard, { combineWith: "AND" }).slice(0, 100),
+      query,
+      options
+    );
+    if (!trimmedQuery || strict.length > 0 || trimmedQuery.split(/\s+/).length < 2)
+      return strict.slice(0, limit);
+    const fallbackTerms = meaningfulQueryTerms(trimmedQuery);
+    const fallback = this.resultsForHits(
+      this.index.search(trimmedQuery, { combineWith: "OR" }).filter((hit) => matchesMeaningfulQueryTerm(hit, fallbackTerms)).slice(0, 100),
+      query,
+      options
+    );
+    return fallback.slice(0, limit);
+  }
+  resultsForHits(hits, query, options) {
+    const tagFilter = new Set(options.tags ?? []);
+    return hits.map((hit) => ({ hit, concept: this.graph.concepts.get(hit.id) })).filter(
+      (row) => Boolean(row.concept)
+    ).filter(({ concept }) => !options.type || concept.type === options.type).filter(
+      ({ concept }) => tagFilter.size === 0 || concept.tags.some((tag) => tagFilter.has(tag))
+    ).map(({ hit, concept }) => ({
+      id: concept.id,
+      title: concept.title,
+      type: concept.type,
+      description: concept.description,
+      tags: concept.tags,
+      resource: concept.resource,
+      snippet: snippet(concept, query),
+      score: hit.score
+    }));
+  }
+  getConcept(idOrPath) {
+    const id = idOrPath.replace(/\.md$/i, "");
+    return this.graph.concepts.get(id) ?? [...this.graph.concepts.values()].find((concept) => concept.path === idOrPath);
+  }
+};
+
 // src/source-store.ts
 import fs5 from "fs/promises";
 import { randomUUID } from "crypto";
@@ -937,286 +1217,6 @@ function isInsideOrEqual(parent, child) {
 function isNodeError(error) {
   return error instanceof Error && "code" in error;
 }
-
-// src/mcp-contract.ts
-import { z } from "zod";
-var MCP_TOOL_NAMES = [
-  "search_concepts",
-  "read_concept",
-  "get_neighbors",
-  "list_types",
-  "list_tags",
-  "bundle_summary"
-];
-var [
-  SEARCH_CONCEPTS_TOOL,
-  READ_CONCEPT_TOOL,
-  GET_NEIGHBORS_TOOL,
-  LIST_TYPES_TOOL,
-  LIST_TAGS_TOOL,
-  BUNDLE_SUMMARY_TOOL
-] = MCP_TOOL_NAMES;
-var REFRESHABLE_TOOL_NAMES = new Set(
-  MCP_TOOL_NAMES.filter((tool) => tool !== BUNDLE_SUMMARY_TOOL)
-);
-function refreshableTool(name) {
-  return REFRESHABLE_TOOL_NAMES.has(name);
-}
-var searchSchema = z.object({
-  query: z.string(),
-  type: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-  limit: z.number().int().positive().max(50).optional()
-});
-var readSchema = z.object({
-  id: z.string(),
-  max_chars: z.number().int().positive().optional()
-});
-var neighborsSchema = z.object({
-  id: z.string(),
-  depth: z.number().int().min(1).max(2).optional()
-});
-var sourceFilterSchema = z.object({ source: z.string().optional() });
-var workspaceSearchSchema = searchSchema.extend({ source: z.string().optional() });
-var workspaceReadSchema = readSchema.extend({ source: z.string().optional() });
-var workspaceNeighborsSchema = neighborsSchema.extend({ source: z.string().optional() });
-var stringInputProperty = { type: "string" };
-var sourceInputProperty = { type: "string" };
-var tagsInputProperty = { type: "array", items: { type: "string" } };
-var limitInputProperty = { type: "integer", minimum: 1, maximum: 50, default: 10 };
-var maxCharsInputProperty = { type: "integer", minimum: 1 };
-var depthInputProperty = { type: "integer", minimum: 1, maximum: 2, default: 1 };
-function withOptionalSourceInputSchema(schema, sourcePosition = "first") {
-  if (sourcePosition === "afterQuery" && "query" in schema.properties) {
-    const { query, ...properties } = schema.properties;
-    return { ...schema, properties: { query, source: sourceInputProperty, ...properties } };
-  }
-  return { ...schema, properties: { source: sourceInputProperty, ...schema.properties } };
-}
-var searchInputSchema = {
-  type: "object",
-  properties: {
-    query: stringInputProperty,
-    type: stringInputProperty,
-    tags: tagsInputProperty,
-    limit: limitInputProperty
-  },
-  required: ["query"]
-};
-var readInputSchema = {
-  type: "object",
-  properties: { id: stringInputProperty, max_chars: maxCharsInputProperty },
-  required: ["id"]
-};
-var neighborsInputSchema = {
-  type: "object",
-  properties: {
-    id: stringInputProperty,
-    depth: depthInputProperty
-  },
-  required: ["id"]
-};
-var sourceFilterInputSchema = {
-  type: "object",
-  properties: { source: sourceInputProperty }
-};
-var workspaceSearchInputSchema = withOptionalSourceInputSchema(searchInputSchema, "afterQuery");
-var workspaceReadInputSchema = withOptionalSourceInputSchema(readInputSchema);
-var workspaceNeighborsInputSchema = withOptionalSourceInputSchema(neighborsInputSchema);
-function mcpToolDefinitions(mode) {
-  if (mode === "bundle") {
-    return [
-      {
-        name: SEARCH_CONCEPTS_TOOL,
-        description: "Search OKF concepts by query, type, and tags.",
-        inputSchema: searchInputSchema
-      },
-      {
-        name: READ_CONCEPT_TOOL,
-        description: "Read one OKF concept by id or path.",
-        inputSchema: readInputSchema
-      },
-      {
-        name: GET_NEIGHBORS_TOOL,
-        description: "Return outbound links and backlinks for a concept.",
-        inputSchema: neighborsInputSchema
-      },
-      {
-        name: LIST_TYPES_TOOL,
-        description: "List concept types and counts.",
-        inputSchema: { type: "object", properties: {} }
-      },
-      {
-        name: LIST_TAGS_TOOL,
-        description: "List concept tags and counts.",
-        inputSchema: { type: "object", properties: {} }
-      },
-      {
-        name: BUNDLE_SUMMARY_TOOL,
-        description: "Return bundle stats and validation status.",
-        inputSchema: { type: "object", properties: {} }
-      }
-    ];
-  }
-  return [
-    {
-      name: SEARCH_CONCEPTS_TOOL,
-      description: "Search workspace OKF concepts by query, source, type, and tags.",
-      inputSchema: workspaceSearchInputSchema
-    },
-    {
-      name: READ_CONCEPT_TOOL,
-      description: "Read one workspace OKF concept by source and id. Id-only reads work when the id is unique.",
-      inputSchema: workspaceReadInputSchema
-    },
-    {
-      name: GET_NEIGHBORS_TOOL,
-      description: "Return outbound links and backlinks for a workspace concept.",
-      inputSchema: workspaceNeighborsInputSchema
-    },
-    {
-      name: LIST_TYPES_TOOL,
-      description: "List workspace concept types and counts.",
-      inputSchema: sourceFilterInputSchema
-    },
-    {
-      name: LIST_TAGS_TOOL,
-      description: "List workspace concept tags and counts.",
-      inputSchema: sourceFilterInputSchema
-    },
-    {
-      name: BUNDLE_SUMMARY_TOOL,
-      description: "Return workspace stats, per-source validation, and freshness status.",
-      inputSchema: sourceFilterInputSchema
-    }
-  ];
-}
-
-// src/search.ts
-import MiniSearch from "minisearch";
-function snippet(concept, query, max = 240) {
-  const text = `${concept.description ?? ""} ${concept.body}`.replace(/\s+/g, " ").trim();
-  const lower = text.toLowerCase();
-  const term = query.toLowerCase().split(/\s+/).find(Boolean) ?? "";
-  const index = term ? lower.indexOf(term) : -1;
-  const start = Math.max(0, index - 80);
-  return text.slice(start, start + max);
-}
-var STOPWORDS = /* @__PURE__ */ new Set([
-  "about",
-  "after",
-  "and",
-  "are",
-  "can",
-  "could",
-  "does",
-  "for",
-  "from",
-  "had",
-  "has",
-  "have",
-  "how",
-  "into",
-  "onto",
-  "should",
-  "that",
-  "the",
-  "their",
-  "there",
-  "this",
-  "what",
-  "when",
-  "where",
-  "who",
-  "why",
-  "with",
-  "would",
-  "you",
-  "your"
-]);
-function meaningfulQueryTerms(query) {
-  const terms = /* @__PURE__ */ new Set();
-  for (const token of query.match(/[A-Za-z0-9]+/g) ?? []) {
-    const normalized = token.toLowerCase();
-    const isAcronym = normalized.length >= 2 && ["api", "cli", "mcp", "okf", "sdk"].includes(normalized);
-    if ((normalized.length >= 4 || isAcronym) && !STOPWORDS.has(normalized)) {
-      terms.add(normalized);
-    }
-  }
-  return terms;
-}
-function matchesMeaningfulQueryTerm(hit, terms) {
-  if (terms.size === 0) return false;
-  return (hit.queryTerms ?? []).some((term) => terms.has(term.toLowerCase()));
-}
-var BundleSearch = class _BundleSearch {
-  graph;
-  index;
-  constructor(conceptsByAnyKey) {
-    this.graph = buildGraph(conceptsByAnyKey);
-    this.index = new MiniSearch({
-      fields: ["title", "description", "tags", "type", "body"],
-      storeFields: ["id"],
-      searchOptions: {
-        boost: { title: 4, tags: 3, type: 2, description: 2 },
-        fuzzy: 0.2,
-        prefix: true
-      }
-    });
-    this.index.addAll(
-      [...this.graph.concepts.values()].map((concept) => ({
-        id: concept.id,
-        title: concept.title ?? concept.id,
-        type: concept.type,
-        description: concept.description ?? "",
-        tags: concept.tags.join(" "),
-        body: concept.body
-      }))
-    );
-  }
-  static async fromBundle(bundleDir) {
-    return new _BundleSearch(await readBundle(bundleDir));
-  }
-  search(query, options = {}) {
-    const limit = options.limit ?? 10;
-    const trimmedQuery = query.trim();
-    const strict = this.resultsForHits(
-      this.index.search(trimmedQuery || MiniSearch.wildcard, { combineWith: "AND" }).slice(0, 100),
-      query,
-      options
-    );
-    if (!trimmedQuery || strict.length > 0 || trimmedQuery.split(/\s+/).length < 2)
-      return strict.slice(0, limit);
-    const fallbackTerms = meaningfulQueryTerms(trimmedQuery);
-    const fallback = this.resultsForHits(
-      this.index.search(trimmedQuery, { combineWith: "OR" }).filter((hit) => matchesMeaningfulQueryTerm(hit, fallbackTerms)).slice(0, 100),
-      query,
-      options
-    );
-    return fallback.slice(0, limit);
-  }
-  resultsForHits(hits, query, options) {
-    const tagFilter = new Set(options.tags ?? []);
-    return hits.map((hit) => ({ hit, concept: this.graph.concepts.get(hit.id) })).filter(
-      (row) => Boolean(row.concept)
-    ).filter(({ concept }) => !options.type || concept.type === options.type).filter(
-      ({ concept }) => tagFilter.size === 0 || concept.tags.some((tag) => tagFilter.has(tag))
-    ).map(({ hit, concept }) => ({
-      id: concept.id,
-      title: concept.title,
-      type: concept.type,
-      description: concept.description,
-      tags: concept.tags,
-      resource: concept.resource,
-      snippet: snippet(concept, query),
-      score: hit.score
-    }));
-  }
-  getConcept(idOrPath) {
-    const id = idOrPath.replace(/\.md$/i, "");
-    return this.graph.concepts.get(id) ?? [...this.graph.concepts.values()].find((concept) => concept.path === idOrPath);
-  }
-};
 
 // src/workspace.ts
 import fs6 from "fs/promises";
@@ -2577,6 +2577,8 @@ export {
   readBundle,
   validateBundle,
   inspectBundle,
+  MCP_TOOL_NAMES,
+  BundleSearch,
   resolveOkfitHome2,
   validateSourceName,
   resolveSourceDir,
@@ -2588,8 +2590,6 @@ export {
   readSourceRecord,
   listSources,
   removeSource,
-  MCP_TOOL_NAMES,
-  BundleSearch,
   bundleSourceName,
   localBundleRecord,
   assertUniqueWorkspaceRecordNames,

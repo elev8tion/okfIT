@@ -103,6 +103,26 @@ Use `npx -y okfit map ./docs-okf --out okfit-inspector.html` for a local OKF bun
 
 Use `--json` when CI or tests need the same Inspector report model without writing HTML.
 
+## Local OKFIT Hub
+
+Hub is a local source-aware dashboard and JSON API over registered sources and imported OKF bundles in the active `OKFIT_HOME`. Use it for global search, traceability, graph export, and a Hub-wide MCP entry point.
+
+Hub is not a cloud service, not a managed service, and not account-based. It reads registered sources from `$OKFIT_HOME/sources`, stores imports under `$OKFIT_HOME/hub/imports`, and defaults to `~/.okfit`.
+
+```bash
+npx -y okfit hub
+npx -y okfit dashboard
+npx -y okfit hub import ./docs-okf --name project-docs
+npx -y okfit hub search "checkout sessions"
+npx -y okfit hub trace stripe:reference/api
+npx -y okfit hub export graph
+npx -y okfit hub mcp
+```
+
+Use `okfit serve ... --mcp` for one explicit source or selected workspace. Use `okfit hub mcp` for the full local Hub surface.
+
+Full guide: https://github.com/okfIT/okfIT/blob/main/docs/hub.md
+
 ## Multi-Source Workspaces
 
 Register several docs sources and expose them through one source-aware MCP server:
@@ -258,6 +278,13 @@ okfit validate <bundle>
 okfit inspect <bundle>
 okfit activate <name-or-bundle> [more-source-names...] --client codex --out okfit-activation
 okfit map <name-or-bundle> [more-source-names...] --out okfit-inspector.html
+okfit hub
+okfit dashboard
+okfit hub import <path> --name <name>
+okfit hub search <query>
+okfit hub trace <source:concept>
+okfit hub export graph
+okfit hub mcp
 okfit serve <name-or-bundle> [more-source-names...] --mcp
 okfit demo
 ```
@@ -301,6 +328,7 @@ Validation errors are limited to OKF conformance: malformed or missing concept f
 
 - GitHub: https://github.com/okfIT/okfIT
 - MCP client setup: https://github.com/okfIT/okfIT/blob/main/docs/mcp-clients.md
+- Hub guide: https://github.com/okfIT/okfIT/blob/main/docs/hub.md
 - OKF: https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf
 
 ## License

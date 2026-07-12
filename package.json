@@ -26,6 +26,7 @@
     "assets/logo.png",
     "assets/demo.gif",
     "docs/mcp-clients.md",
+    "docs/hub.md",
     "skills",
     "examples"
   ],
@@ -44,6 +45,7 @@
   },
   "scripts": {
     "build": "tsup src/cli.ts src/index.ts src/setup-artifacts.ts --format esm --dts --clean",
+    "dev": "node scripts/dev.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
