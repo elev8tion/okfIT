@@ -1,6 +1,6 @@
 {
   "name": "okfit",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Convert docs into Open Knowledge Format bundles and serve them to MCP agents.",
   "type": "module",
   "main": "./dist/index.js",
@@ -86,6 +86,8 @@
   },
   "license": "MIT",
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
